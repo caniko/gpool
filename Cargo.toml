@@ -1,6 +1,26 @@
 [package]
-name = "gpool"
+name = "item_pool"
 version = "0.1.0"
 edition = "2024"
+description = "A simple trait for managing pools of reusable items with discard/recycle support."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/YOUR_USERNAME/item_pool"
+readme = "README.md"
+keywords = ["pool", "item", "random", "recycling", "bevy"]
+categories = ["algorithms", "data-structures", "game-development"]
 
 [dependencies]
+bevy_utils = "0.15"
+rand = "0"
+bevy_ecs = { version = "0.15", optional = true }
+
+[dev-dependencies]
+item_pool = { path = ".", features = ["bevy"] }
+
+[features]
+default = []
+bevy = ["dep:bevy_ecs"]
+
+[[example]]
+name = "enemy_example"
+path = "examples/enemy_example.rs"
