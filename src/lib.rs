@@ -1,61 +1,235 @@
-#![feature(trait_alias)]
+//! # Item Pool
+//!
+//! A lightweight library for managing pools of reusable items with support for
+//! random selection, unique set retrieval, and item recycling.
+//!
+//! ## Features
+//!
+//! - **Random Item Selection**: Efficiently retrieve random items from a pool
+//! - **Unique Sets**: Get sets of unique items without duplicates
+//! - **Item Recycling**: Temporarily discard items and recycle them back into the pool
+//! - **Zero Dependencies**: Only uses `rand` for randomization
+//!
+//! ## Example
+//!
+//! ```rust
+//! use itempool::{ItemPool, RecyclingItemPool};
+//! use std::collections::HashSet;
+//!
+//! #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+//! struct EntityId(u32);
+//!
+//! struct EnemyPool {
+//!     available: Vec<EntityId>,
+//!     discarded: Vec<EntityId>,
+//! }
+//!
+//! impl ItemPool<EntityId> for EnemyPool {
+//!     fn pool(&mut self) -> &mut Vec<EntityId> {
+//!         &mut self.available
+//!     }
+//! }
+//!
+//! impl RecyclingItemPool<EntityId> for EnemyPool {
+//!     fn get_discard_pool(&mut self) -> &mut Vec<EntityId> {
+//!         &mut self.discarded
+//!     }
+//! }
+//! ```
 
-#[cfg(feature = "bevy")]
-pub mod bevy;
+use std::collections::HashSet;
 
-use bevy_utils::HashSet;
-use rand::random_range;
+use rand::{Rng, rng};
 
 /// Trait for items that can be stored and retrieved from an item pool.
-pub trait PoolItem = std::hash::Hash + Eq + Sync;
+///
+/// Items must be:
+/// - `Hash`: Required for storing in `HashSet` to ensure uniqueness
+/// - `Eq`: Required for equality comparisons
+/// - `Sync`: Required for safe concurrent access across threads
+pub trait PoolItem: std::hash::Hash + Eq + Sync {}
+
+/// Blanket implementation for all types that satisfy the constraints.
+impl<T> PoolItem for T where T: std::hash::Hash + Eq + Sync {}
 
 /// Trait for a resource that manages a single store of items.
+///
+/// This trait provides methods for adding items to a pool and retrieving them
+/// randomly. Items are removed from the pool when retrieved.
+///
+/// # Type Parameters
+///
+/// * `T` - The type of items stored in the pool, must implement [`PoolItem`]
+///
+/// # Examples
+///
+/// ```rust
+/// use itempool::ItemPool;
+///
+/// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// struct Item(i32);
+///
+/// struct SimplePool {
+///     items: Vec<Item>,
+/// }
+///
+/// impl ItemPool<Item> for SimplePool {
+///     fn pool(&mut self) -> &mut Vec<Item> {
+///         &mut self.items
+///     }
+/// }
+/// ```
 pub trait ItemPool<T: PoolItem> {
-    /// Returns a label for this item pool.
-    fn label(&self) -> String;
-
     /// Returns a mutable reference to the main pool of items.
+    ///
+    /// This is the primary storage for available items that can be retrieved.
     fn pool(&mut self) -> &mut Vec<T>;
 
-    /// Returns a mutable reference to the pool of discarded items.
-    /// 
-    /// A temporary storage area for items that have been removed from the main pool
-    /// but might be needed again later. This allows for recycling of items without
-    /// needing to re-allocate or re-initialize them.
-    fn get_discard_pool(&mut self) -> &mut Vec<T>;
-
-    /// Discards a single item by moving it from the main pool to the discard pool.
-    fn discard_one(&mut self, item: T) {
-        self.get_discard_pool().push(item);
-    }
-
-    /// Moves all items from the discard pool back into the main pool.
-    fn recycle_discarded(&mut self) {
-        let mut discard_pool = std::mem::take(self.get_discard_pool());
-        // Append all recycled items into the pool.
-        self.pool().append(&mut discard_pool);
-    }
-
-    /// Retrieves a specified number of unique items from the pool.
+    /// Adds an item to the pool.
     ///
-    /// Items are randomly selected from the pool. If a selected item is already
-    /// in the result set, it is returned to the pool and another item is selected.
+    /// # Arguments
+    ///
+    /// * `item` - The item to add to the pool
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::ItemPool;
+    /// # #[derive(Hash, Eq, PartialEq)] struct Item;
+    /// # struct Pool { items: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # let mut pool = Pool { items: vec![] };
+    /// pool.put(Item);
+    /// ```
+    fn put(&mut self, item: T) {
+        self.pool().push(item);
+    }
+
+    /// Retrieves and removes one randomly selected item from the pool.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(T)` - A randomly selected item from the pool
+    /// * `None` - If the pool is empty
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::ItemPool;
+    /// # #[derive(Hash, Eq, PartialEq, Debug)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # let mut pool = Pool { items: vec![Item(1), Item(2), Item(3)] };
+    /// if let Some(item) = pool.remove_one() {
+    ///     println!("Got item: {:?}", item);
+    /// }
+    /// ```
+    fn remove_one(&mut self) -> Option<T> {
+        let store = self.pool();
+        if store.is_empty() {
+            None
+        } else {
+            Some(store.remove(rng().random_range(0..store.len())))
+        }
+    }
+
+    /// Retrieves and removes a specified number of items from the pool.
+    ///
+    /// Items are selected randomly. Note that uniqueness is **not** guaranteed -
+    /// the same item may appear multiple times if it was in the pool multiple times.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The number of items to retrieve
+    ///
+    /// # Returns
+    ///
+    /// A vector containing the requested items
     ///
     /// # Panics
     ///
-    /// Panics if the pool is empty.
-    fn get_set(&mut self, mut size: usize) -> HashSet<T> {
-        self.recycle_discarded();
-
+    /// Panics in debug mode if:
+    /// * The pool is empty
+    /// * `size` exceeds the number of available items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::ItemPool;
+    /// # #[derive(Hash, Eq, PartialEq, Debug)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # let mut pool = Pool { items: (0..10).map(Item).collect() };
+    /// let items = pool.remove_many(3);
+    /// assert_eq!(items.len(), 3);
+    /// ```
+    fn remove_many(&mut self, size: usize) -> Vec<T> {
         let store = self.pool();
-        debug_assert!(!store.is_empty(), "The {} pool is empty", self.label());
+        debug_assert!(!store.is_empty(), "The pool is empty");
 
         let mut remaining = store.len();
+        debug_assert!(
+            size <= remaining,
+            "Requested size exceeds available items in the pool: {} <= {}",
+            size,
+            remaining
+        );
+
+        let mut values = Vec::with_capacity(size);
+        for _ in 0..size {
+            values.push(store.remove(rng().random_range(0..remaining)));
+            remaining -= 1;
+        }
+        values
+    }
+
+    /// Retrieves and removes a specified number of **unique** items from the pool.
+    ///
+    /// Items are randomly selected. If a selected item is already in the result set,
+    /// it is temporarily set aside and another item is selected. Items that collide
+    /// are returned to the pool after selection is complete.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The number of unique items to retrieve
+    ///
+    /// # Returns
+    ///
+    /// A `HashSet` containing the unique items
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if:
+    /// * The pool is empty
+    /// * `size` exceeds the number of available items
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::ItemPool;
+    /// # #[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # let mut pool = Pool { items: (0..10).map(Item).collect() };
+    /// let items = pool.remove_set(5);
+    /// assert_eq!(items.len(), 5); // All items are unique
+    /// ```
+    fn remove_set(&mut self, mut size: usize) -> HashSet<T> {
+        let store = self.pool();
+        debug_assert!(!store.is_empty(), "The pool is empty");
+
+        let mut remaining = store.len();
+        debug_assert!(
+            size <= remaining,
+            "Requested size exceeds available items in the pool: {} <= {}",
+            size,
+            remaining
+        );
 
         let mut colliding = Vec::new();
         let mut values = HashSet::new();
         while size - colliding.len() > 0 {
-            let draw = store.remove(random_range(0..remaining));
+            let draw = store.remove(rng().random_range(0..remaining));
             match values.contains(&draw) {
                 true => colliding.push(draw),
                 false => {
@@ -65,228 +239,293 @@ pub trait ItemPool<T: PoolItem> {
                 }
             }
         }
-        store.extend(colliding.into_iter());
+        store.append(&mut colliding);
         values
     }
+}
 
-    /// Retrieves a single random item from the pool.
+/// Trait for managing item pools with discard and recycling capabilities.
+///
+/// This trait extends [`ItemPool`] to add support for temporarily discarding items
+/// and later recycling them back into the main pool. This is useful for scenarios
+/// where items need to be temporarily unavailable but should be reused later.
+///
+/// # Examples
+///
+/// ```
+/// use itempool::{ItemPool, RecyclingItemPool};
+/// use std::collections::HashSet;
+///
+/// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// struct Card(u32);
+///
+/// struct Deck {
+///     draw_pile: Vec<Card>,
+///     discard_pile: Vec<Card>,
+/// }
+///
+/// impl ItemPool<Card> for Deck {
+///     fn pool(&mut self) -> &mut Vec<Card> {
+///         &mut self.draw_pile
+///     }
+/// }
+///
+/// impl RecyclingItemPool<Card> for Deck {
+///     fn get_discard_pool(&mut self) -> &mut Vec<Card> {
+///         &mut self.discard_pile
+///     }
+/// }
+/// ```
+pub trait RecyclingItemPool<T: PoolItem>: ItemPool<T> {
+    /// Returns a mutable reference to the pool of discarded items.
+    ///
+    /// A temporary storage area for items that have been removed from the main pool
+    /// but might be needed again later. This allows for recycling of items without
+    /// needing to re-allocate or re-initialize them.
+    fn get_discard_pool(&mut self) -> &mut Vec<T>;
+
+    /// Adds an item to the discard pool.
+    ///
+    /// Note: This method only adds the item to the discard pool. It does not
+    /// remove it from the main pool. If you need to move an item from the main
+    /// pool to the discard pool, you must remove it from the main pool separately.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The item to discard
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::{ItemPool, RecyclingItemPool};
+    /// # #[derive(Hash, Eq, PartialEq, Clone, Copy)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item>, discarded: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # impl RecyclingItemPool<Item> for Pool { fn get_discard_pool(&mut self) -> &mut Vec<Item> { &mut self.discarded } }
+    /// # let mut pool = Pool { items: vec![], discarded: vec![] };
+    /// pool.discard_one(Item(1));
+    /// ```
+    fn discard_one(&mut self, item: T) {
+        self.get_discard_pool().push(item);
+    }
+
+    /// Moves all items from the discard pool back into the main pool.
+    ///
+    /// After this operation, the discard pool will be empty and all previously
+    /// discarded items will be available again in the main pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::{ItemPool, RecyclingItemPool};
+    /// # #[derive(Hash, Eq, PartialEq, Clone, Copy)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item>, discarded: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # impl RecyclingItemPool<Item> for Pool { fn get_discard_pool(&mut self) -> &mut Vec<Item> { &mut self.discarded } }
+    /// # let mut pool = Pool { items: vec![], discarded: vec![Item(1), Item(2)] };
+    /// pool.recycle_discarded();
+    /// assert_eq!(pool.pool().len(), 2);
+    /// assert_eq!(pool.get_discard_pool().len(), 0);
+    /// ```
+    fn recycle_discarded(&mut self) {
+        let mut discard_pool = std::mem::take(self.get_discard_pool());
+        // Append all recycled items into the pool.
+        self.pool().append(&mut discard_pool);
+    }
+
+    /// Retrieves a set of unique items, automatically recycling discarded items first.
+    ///
+    /// This method first calls [`recycle_discarded`](Self::recycle_discarded) to ensure
+    /// all discarded items are available, then retrieves the requested number of unique
+    /// items using [`ItemPool::remove_set`].
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - The number of unique items to retrieve
+    ///
+    /// # Returns
+    ///
+    /// A `HashSet` containing the unique items
     ///
     /// # Panics
     ///
-    /// Panics if the pool is empty.
-    fn get_one(&mut self) -> T {
-        let store = self.pool();
-        debug_assert!(!store.is_empty(), "The {} pool is empty", self.label());
-
-        store.remove(random_range(0..store.len()))
+    /// Panics in debug mode if:
+    /// * The combined pool (main + discarded) is empty after recycling
+    /// * `size` exceeds the total number of available items after recycling
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use itempool::{ItemPool, RecyclingItemPool};
+    /// # #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)] struct Item(i32);
+    /// # struct Pool { items: Vec<Item>, discarded: Vec<Item> }
+    /// # impl ItemPool<Item> for Pool { fn pool(&mut self) -> &mut Vec<Item> { &mut self.items } }
+    /// # impl RecyclingItemPool<Item> for Pool { fn get_discard_pool(&mut self) -> &mut Vec<Item> { &mut self.discarded } }
+    /// # let mut pool = Pool { items: (0..5).map(Item).collect(), discarded: (5..10).map(Item).collect() };
+    /// let items = pool.get_set(7);
+    /// assert_eq!(items.len(), 7);
+    /// ```
+    fn get_set(&mut self, size: usize) -> HashSet<T> {
+        // Recycle discarded items before getting a set
+        self.recycle_discarded();
+        // Call the original get_set method
+        ItemPool::remove_set(self, size)
     }
 }
 
 #[cfg(test)]
-mod test {
-    use super::*; // Import items from the parent module (where your code is)
+mod tests {
+    use super::*;
 
-    // Concrete implementation for testing
-    #[derive(Debug)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct TestItem(i32);
+
     struct TestPool {
-        label: String,
-        items: Vec<u32>, // Using u32 as a concrete PoolItem type for tests
-        discarded_items: Vec<u32>,
+        items: Vec<TestItem>,
     }
 
-    impl TestPool {
-        fn new(label: &str, initial_items: Vec<u32>) -> Self {
-            TestPool {
-                label: label.to_string(),
-                items: initial_items,
-                discarded_items: Vec::new(),
-            }
-        }
-    }
-
-    // Implement the trait for our test struct
-    impl ItemPool<u32> for TestPool {
-        fn label(&self) -> String {
-            self.label.clone()
-        }
-
-        fn pool(&mut self) -> &mut Vec<u32> {
+    impl ItemPool<TestItem> for TestPool {
+        fn pool(&mut self) -> &mut Vec<TestItem> {
             &mut self.items
         }
+    }
 
-        fn get_discard_pool(&mut self) -> &mut Vec<u32> {
-            &mut self.discarded_items
+    struct TestRecyclingPool {
+        items: Vec<TestItem>,
+        discarded: Vec<TestItem>,
+    }
+
+    impl ItemPool<TestItem> for TestRecyclingPool {
+        fn pool(&mut self) -> &mut Vec<TestItem> {
+            &mut self.items
         }
     }
 
-    // --- Unit Tests ---
-
-    #[test]
-    fn test_label() {
-        let pool = TestPool::new("MyTestPool", vec![1, 2, 3]);
-        assert_eq!(pool.label(), "MyTestPool");
+    impl RecyclingItemPool<TestItem> for TestRecyclingPool {
+        fn get_discard_pool(&mut self) -> &mut Vec<TestItem> {
+            &mut self.discarded
+        }
     }
 
     #[test]
-    fn test_discard_one() {
-        let mut pool = TestPool::new("DiscardTest", vec![10, 20, 30]);
-        assert_eq!(pool.pool().len(), 3);
-        assert!(pool.get_discard_pool().is_empty());
-
-        // Note: discard_one only moves to discard, it doesn't remove from the main pool
-        // in this default implementation. This might be unexpected.
-        // Let's test the implemented behavior.
-        pool.discard_one(20);
-
-        // Assert item is in discard pool
-        assert_eq!(pool.get_discard_pool().len(), 1);
-        assert_eq!(pool.get_discard_pool()[0], 20);
-
-        // Assert item is *still* in the main pool (based on default implementation)
-        // This is important to note. If removal from main pool was intended,
-        // the trait or the implementation using it would need adjustment.
-        // However, get_one/get_set *do* remove from the main pool.
-        assert_eq!(pool.pool().len(), 3);
-        assert!(pool.pool().contains(&20));
-    }
-
-    #[test]
-    fn test_recycle_discarded() {
-        let mut pool = TestPool::new("RecycleTest", vec![1, 2]);
-        // Manually add to discard for testing recycle logic directly
-        pool.get_discard_pool().push(3);
-        pool.get_discard_pool().push(4);
-
+    fn test_put() {
+        let mut pool = TestPool { items: vec![] };
+        pool.put(TestItem(1));
+        pool.put(TestItem(2));
         assert_eq!(pool.pool().len(), 2);
+    }
+
+    #[test]
+    fn test_remove_one_empty() {
+        let mut pool = TestPool { items: vec![] };
+        assert_eq!(pool.remove_one(), None);
+    }
+
+    #[test]
+    fn test_remove_one_success() {
+        let mut pool = TestPool {
+            items: vec![TestItem(1), TestItem(2), TestItem(3)],
+        };
+        let item = pool.remove_one();
+        assert!(item.is_some());
+        assert_eq!(pool.pool().len(), 2);
+    }
+
+    #[test]
+    fn test_remove_many() {
+        let mut pool = TestPool {
+            items: (0..10).map(TestItem).collect(),
+        };
+        let items = pool.remove_many(5);
+        assert_eq!(items.len(), 5);
+        assert_eq!(pool.pool().len(), 5);
+    }
+
+    #[test]
+    fn test_remove_set_uniqueness() {
+        let mut pool = TestPool {
+            items: (0..10).map(TestItem).collect(),
+        };
+        let set = pool.remove_set(5);
+        assert_eq!(set.len(), 5);
+        assert_eq!(pool.pool().len(), 5);
+
+        // Verify all items are unique
+        let vec: Vec<_> = set.into_iter().collect();
+        let unique_set: HashSet<_> = vec.iter().copied().collect();
+        assert_eq!(vec.len(), unique_set.len());
+    }
+
+    #[test]
+    fn test_remove_set_all_items() {
+        let mut pool = TestPool {
+            items: (0..5).map(TestItem).collect(),
+        };
+        let set = pool.remove_set(5);
+        assert_eq!(set.len(), 5);
+        assert_eq!(pool.pool().len(), 0);
+    }
+
+    #[test]
+    fn test_discard_and_recycle() {
+        let mut pool = TestRecyclingPool {
+            items: (0..5).map(TestItem).collect(),
+            discarded: vec![],
+        };
+
+        pool.discard_one(TestItem(10));
+        pool.discard_one(TestItem(11));
         assert_eq!(pool.get_discard_pool().len(), 2);
+        assert_eq!(pool.pool().len(), 5);
 
         pool.recycle_discarded();
-
-        assert!(pool.get_discard_pool().is_empty());
-        assert_eq!(pool.pool().len(), 4);
-        // Order might not be guaranteed depending on append behavior, so check contents
-        let mut expected_items = vec![1, 2, 3, 4];
-        let mut actual_items = pool.pool().clone();
-        expected_items.sort_unstable();
-        actual_items.sort_unstable();
-        assert_eq!(actual_items, expected_items);
-    }
-
-    #[test]
-    fn test_get_one() {
-        let mut pool = TestPool::new("GetOneTest", vec![5, 15, 25]);
-        let initial_len = pool.pool().len();
-
-        let item = pool.get_one();
-
-        // Check item was from the original pool
-        assert!([5, 15, 25].contains(&item));
-        // Check pool size decreased
-        assert_eq!(pool.pool().len(), initial_len - 1);
-        // Check the specific item is removed
-        assert!(!pool.pool().contains(&item));
-    }
-
-    #[test]
-    #[should_panic(expected = "The GetOneEmptyTest pool is empty")]
-    fn test_get_one_empty_pool_panics() {
-        let mut pool = TestPool::new("GetOneEmptyTest", vec![]);
-        pool.get_one(); // This should panic
-    }
-
-    #[test]
-    fn test_get_set() {
-        let mut pool = TestPool::new("GetSetTest", vec![1, 2, 3, 4, 5, 6, 7]);
-        let initial_len = pool.pool().len();
-        let requested_size: usize = 3;
-
-        let item_set = pool.get_set(requested_size);
-
-        // Check set size
-        assert_eq!(item_set.len(), requested_size as usize);
-        // Check pool size decreased correctly
-        assert_eq!(pool.pool().len(), initial_len - (requested_size as usize));
-
-        // Check all items in the set were originally in the pool and are now removed
-        let initial_items: HashSet<u32> = [1, 2, 3, 4, 5, 6, 7].iter().cloned().collect();
-        for item in item_set.iter() {
-            assert!(initial_items.contains(item));
-            assert!(!pool.pool().contains(item));
-        }
+        assert_eq!(pool.get_discard_pool().len(), 0);
+        assert_eq!(pool.pool().len(), 7);
     }
 
     #[test]
     fn test_get_set_with_recycling() {
-        let mut pool = TestPool::new("GetSetRecycleTest", vec![1, 2]);
-        pool.get_discard_pool().push(3);
-        pool.get_discard_pool().push(4);
-        let requested_size: usize = 3;
+        let mut pool = TestRecyclingPool {
+            items: (0..3).map(TestItem).collect(),
+            discarded: (3..7).map(TestItem).collect(),
+        };
 
-        // Pool starts with [1, 2], discard has [3, 4]
-        // get_set first recycles, pool becomes [1, 2, 3, 4] (order may vary)
-        let initial_total_len = pool.pool().len() + pool.get_discard_pool().len(); // Should be 4
-
-        let item_set = pool.get_set(requested_size);
-
-        // Check discard pool is empty after recycling step in get_set
-        assert!(pool.get_discard_pool().is_empty());
-        // Check set size
-        assert_eq!(item_set.len(), requested_size as usize); // Should be 3
-        // Check pool size decreased correctly from the total available after recycling
-        assert_eq!(pool.pool().len(), initial_total_len - (requested_size as usize)); // Should be 4 - 3 = 1
-
-        // Check items came from the combined pool
-        let combined_items: HashSet<u32> = [1, 2, 3, 4].iter().cloned().collect();
-        for item in item_set.iter() {
-            assert!(combined_items.contains(item));
-            assert!(!pool.pool().contains(item)); // Check they were removed from the final pool state
-        }
+        let set = pool.get_set(5);
+        assert_eq!(set.len(), 5);
+        assert_eq!(pool.get_discard_pool().len(), 0);
+        assert_eq!(pool.pool().len(), 2);
     }
 
     #[test]
-    fn test_get_set_request_all() {
-        let mut pool = TestPool::new("GetSetAllTest", vec![10, 20, 30]);
-        let initial_len = pool.pool().len();
-        let requested_size: usize = 3;
+    fn test_multiple_operations() {
+        let mut pool = TestRecyclingPool {
+            items: (0..10).map(TestItem).collect(),
+            discarded: vec![],
+        };
 
-        let item_set = pool.get_set(requested_size);
+        // Remove some items
+        let _first = pool.remove_one();
+        assert_eq!(pool.pool().len(), 9);
 
-        assert_eq!(item_set.len(), initial_len);
-        assert!(pool.pool().is_empty()); // All items should be removed
+        // Remove a set
+        let _set = pool.remove_set(3);
+        assert_eq!(pool.pool().len(), 6);
 
-        let expected_set: HashSet<u32> = [10, 20, 30].iter().cloned().collect();
-        assert_eq!(item_set, expected_set);
+        // Discard and recycle
+        pool.discard_one(TestItem(100));
+        pool.recycle_discarded();
+        assert_eq!(pool.pool().len(), 7);
     }
 
     #[test]
-    #[should_panic(expected = "The GetSetEmptyTest pool is empty")]
-    fn test_get_set_empty_pool_panics() {
-        let mut pool = TestPool::new("GetSetEmptyTest", vec![]);
-        pool.get_set(1); // This should panic
-    }
+    fn test_pool_trait_object_safety() {
+        // This test verifies that our traits can be used properly
+        let mut pool = TestPool {
+            items: vec![TestItem(1), TestItem(2)],
+        };
 
-    #[test]
-    fn test_get_set_handles_duplicates_internally() {
-        // This test is harder to make deterministic due to random draws.
-        // We rely on the implementation detail that duplicates drawn are put
-        // back into the pool eventually (`colliding` vector).
-        // We test that if we request a size smaller than the pool, the final
-        // pool state plus the result set should contain all original unique items.
-        let mut pool = TestPool::new("GetSetDupTest", vec![1, 2, 3, 4, 5]);
-        let initial_items: HashSet<u32> = pool.pool().iter().cloned().collect();
-        let initial_len = pool.pool().len();
-        let requested_size: usize = 2;
-
-        let item_set = pool.get_set(requested_size);
-
-        assert_eq!(item_set.len(), requested_size as usize);
-        assert_eq!(pool.pool().len(), initial_len - (requested_size as usize));
-
-        // Combine remaining pool items and the returned set
-        let final_items: HashSet<u32> = pool.pool().iter().cloned().collect();
-        let reconstructed_items: HashSet<u32> = item_set.union(&final_items).cloned().collect();
-
-        // Should contain all original items
-        assert_eq!(reconstructed_items, initial_items);
+        let item_ref: &mut dyn ItemPool<TestItem> = &mut pool;
+        item_ref.put(TestItem(3));
+        assert_eq!(item_ref.pool().len(), 3);
     }
 }

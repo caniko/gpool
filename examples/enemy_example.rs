@@ -1,4 +1,4 @@
-use item_pool::ItemPool;
+use itempool::{ItemPool, RecyclingItemPool};
 
 // Define your item type (must satisfy PoolItem requirements)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,28 +20,18 @@ impl EnemyPool {
     }
 }
 
-// Implement the trait for your pool struct
+// Implement the ItemPool trait for your pool struct
 impl ItemPool<EntityId> for EnemyPool {
-    fn label(&self) -> String {
-        "EnemyPool".to_string()
-    }
-
     fn pool(&mut self) -> &mut Vec<EntityId> {
         &mut self.available_enemies
     }
+}
 
+// Implement the RecyclingItemPool trait
+impl RecyclingItemPool<EntityId> for EnemyPool {
     fn get_discard_pool(&mut self) -> &mut Vec<EntityId> {
         &mut self.temporarily_disabled
     }
-
-    // Optional: Override discard_one if you need different behavior
-    // fn discard_one(&mut self, item: EntityId) {
-    //     // Example: Remove from main pool AND add to discard pool
-    //     if let Some(pos) = self.available_enemies.iter().position(|&x| x == item) {
-    //         self.available_enemies.remove(pos);
-    //     }
-    //     self.temporarily_disabled.push(item);
-    // }
 }
 
 fn main() {
@@ -51,41 +41,61 @@ fn main() {
     println!("---");
 
     // Get a single enemy
-    let enemy1 = enemy_pool.get_one();
+    let enemy1 = enemy_pool.remove_one();
     println!("Got one enemy: {:?}", enemy1);
-    println!("Pool after get_one: {:?}", enemy_pool.pool());
-    println!("Discard after get_one: {:?}", enemy_pool.get_discard_pool());
+    println!("Pool after remove_one: {:?}", enemy_pool.pool());
+    println!(
+        "Discard after remove_one: {:?}",
+        enemy_pool.get_discard_pool()
+    );
     println!("---");
-
 
     // Get a set of enemies
-    let enemy_squad = enemy_pool.get_set(3);
+    let enemy_squad = enemy_pool.remove_set(3);
     println!("Got enemy squad: {:?}", enemy_squad);
-    println!("Pool after get_set: {:?}", enemy_pool.pool());
-    println!("Discard after get_set: {:?}", enemy_pool.get_discard_pool());
+    println!("Pool after remove_set: {:?}", enemy_pool.pool());
+    println!(
+        "Discard after remove_set: {:?}",
+        enemy_pool.get_discard_pool()
+    );
     println!("---");
 
-    // Manually discard an enemy (using default implementation)
-    // Let's discard an ID we know might still be in the pool, e.g., EntityId(0)
-    // Or one that might have been removed - the default discard doesn't care.
-    let enemy_to_disable = EntityId(5); // This might or might not be present in pool() anymore
+    // Manually discard an enemy
+    let enemy_to_disable = EntityId(5);
     enemy_pool.discard_one(enemy_to_disable);
     println!("Discarded enemy ID: {:?}", enemy_to_disable);
-    println!("Pool after discard_one: {:?}", enemy_pool.pool()); // Unchanged by default discard
-    println!("Discard after discard_one: {:?}", enemy_pool.get_discard_pool()); // Contains EntityId(5)
+    println!("Pool after discard_one: {:?}", enemy_pool.pool());
+    println!(
+        "Discard after discard_one: {:?}",
+        enemy_pool.get_discard_pool()
+    ); // Contains EntityId(5)
     println!("---");
 
-
-    // Get another enemy - this will trigger recycling first
-    println!("Calling get_one, which will recycle first...");
-    let enemy2 = enemy_pool.get_one();
-    println!("Got another enemy: {:?}", enemy2); // Could be EntityId(5) or another
-    println!("Pool after recycle + get_one: {:?}", enemy_pool.pool());
-    println!("Discard after recycle + get_one: {:?}", enemy_pool.get_discard_pool()); // Empty now
+    // Get another enemy using get_set - this will trigger recycling first
+    println!("Calling get_set, which will recycle first...");
+    let enemy2 = enemy_pool.get_set(1);
+    println!("Got another enemy: {:?}", enemy2);
+    println!("Pool after recycle + get_set: {:?}", enemy_pool.pool());
+    println!(
+        "Discard after recycle + get_set: {:?}",
+        enemy_pool.get_discard_pool()
+    ); // Empty now
     println!("---");
 
-    // Recycle remaining discarded items manually (none left here, but demonstrates call)
+    // Demonstrate manual recycling
+    enemy_pool.discard_one(EntityId(7));
+    enemy_pool.discard_one(EntityId(8));
+    println!("Discarded 2 more enemies");
+    println!("Pool before recycle: {:?}", enemy_pool.pool());
+    println!(
+        "Discard before recycle: {:?}",
+        enemy_pool.get_discard_pool()
+    );
+
     enemy_pool.recycle_discarded();
     println!("Pool after manual recycle: {:?}", enemy_pool.pool());
-    println!("Discard after manual recycle: {:?}", enemy_pool.get_discard_pool());
+    println!(
+        "Discard after manual recycle: {:?}",
+        enemy_pool.get_discard_pool()
+    );
 }
