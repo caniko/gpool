@@ -1,5 +1,11 @@
 # itempool
 
+<!-- simit:badges:start -->
+
+[![CI](https://img.shields.io/badge/CI-managed+extra-2088ff)](.github/workflows/ci.yaml) [![crates.io](https://img.shields.io/badge/crates.io-ready-f46623)](https://crates.io/crates/itempool)
+
+<!-- simit:badges:end -->
+
 [![Crates.io](https://img.shields.io/crates/v/itempool.svg)](https://crates.io/crates/itempool)
 [![Docs.rs](https://docs.rs/itempool/badge.svg)](https://docs.rs/itempool)
 [![License](https://img.shields.io/crates/l/itempool.svg)](./LICENSE)
