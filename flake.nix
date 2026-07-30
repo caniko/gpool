@@ -2,7 +2,7 @@
   description = "Flake for the itempool crate";
 
   inputs = {
-    rs-harbor.url = "git+https://codeberg.org/caniko/rs-harbor.git?ref=trunk&rev=9bfa8bdb0ecb22d7bc11448665f7fbaebae7a759";
+    rs-harbor.url = "git+https://codeberg.org/caniko/rs-harbor.git?ref=trunk&rev=c26b735eede8078f795651c4a9cbf0be8733b221";
     crane.url = "github:ipetkov/crane";
 
     flake-utils.url = "github:numtide/flake-utils";
@@ -25,10 +25,8 @@
 
         inherit (pkgs) lib;
 
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "wasm32-unknown-unknown" ];
-        };
-        craneLib = (crane.mkLib pkgs).overrideToolchain (p: rustToolchain);
+        toolchain = rs-harbor.lib.mkToolchain { inherit pkgs; toolchainProfile = "stable"; };
+        inherit (toolchain) rustToolchain craneLib;
         buildCache = rs-harbor.lib.mkBuildCachePolicy {
           inherit pkgs;
           sccachePackage = rs-harbor.packages.${system}.sccache;
