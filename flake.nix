@@ -2,7 +2,8 @@
   description = "Flake for the itempool crate";
 
   inputs = {
-    rs-harbor.url = "git+https://github.com/caniko/rs-harbor.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
+    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
+    rs-harbor.follows = "harbor-rs";
     crane.url = "github:ipetkov/crane";
 
     flake-utils.url = "github:numtide/flake-utils";
@@ -15,7 +16,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
-  outputs = { self, nixpkgs, rs-harbor, crane, flake-utils, rust-overlay, ... }:
+  outputs = { self, nixpkgs, harbor-rs, crane, flake-utils, rust-overlay, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -25,11 +26,11 @@
 
         inherit (pkgs) lib;
 
-        toolchain = rs-harbor.lib.mkToolchain { inherit pkgs; toolchainProfile = "stable"; };
+        toolchain = harbor-rs.lib.mkToolchain { inherit pkgs; toolchainProfile = "stable"; };
         inherit (toolchain) rustToolchain craneLib;
-        buildCache = rs-harbor.lib.mkBuildCachePolicy {
+        buildCache = harbor-rs.lib.mkBuildCachePolicy {
           inherit pkgs;
-          sccachePackage = rs-harbor.packages.${system}.sccache;
+          sccachePackage = harbor-rs.packages.${system}.sccache;
           cacheRoot = null;
           namespaceScope = "canix-rust";
           namespaceGeneration = 5;
