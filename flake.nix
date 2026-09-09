@@ -2,7 +2,7 @@
   description = "Flake for the itempool crate";
 
   inputs = {
-    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=fac8049316846e0ef1c1e6acd92aed7a337b333a";
+    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=891cf7c2827e61ed4b07e3caef6efe0543b0d5d0";
     rs-harbor.follows = "harbor-rs";
     crane.url = "github:ipetkov/crane";
 
